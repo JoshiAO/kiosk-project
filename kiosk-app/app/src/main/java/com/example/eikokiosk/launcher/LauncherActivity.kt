@@ -405,7 +405,7 @@ fun LauncherScreen(
                                 packageName = doc.getString("packageName") ?: return@mapNotNull null,
                                 versionCode = (doc.getLong("versionCode") ?: 0).toInt(),
                                 versionName = doc.getString("versionName") ?: "0.0.0",
-                                apkUrl = doc.getString("apkUrl") ?: "",
+                                apkUrl = doc.getString("downloadUrl") ?: "",
                                 remoteConfig = doc.get("remoteConfig")?.toString(),
                                 isActive = doc.getBoolean("isActive") ?: true,
                                 updatedAt = doc.getTimestamp("updatedAt")?.toDate()?.time ?: 0L
@@ -422,7 +422,12 @@ fun LauncherScreen(
                     for (app in remoteApps) {
                         if (!app.isActive) continue
                         val local = localMap[app.id]
-                        if (local == null || local.versionCode < app.versionCode) {
+                        val isActuallyInstalled = try {
+                            context.packageManager.getPackageInfo(app.packageName, 0)
+                            true
+                        } catch (_: Exception) { false }
+
+                        if (local == null || local.versionCode < app.versionCode || !isActuallyInstalled) {
                             if (app.apkUrl.isNotEmpty()) {
                                 SilentInstaller(context).downloadAndInstall(app.packageName, app.versionCode, app.apkUrl)
                             }
@@ -615,6 +620,9 @@ fun SettingsDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp).padding(top = 16.dp)) {
                 if (selectedTab == 0) {
+                    val clockPrefs = context.getSharedPreferences("KioskSettings", Context.MODE_PRIVATE)
+                    var use24h by remember { mutableStateOf(clockPrefs.getBoolean("use24h", true)) }
+
                     Button(
                         onClick = { 
                             android.widget.Toast.makeText(context, "Syncing apps from cloud...", android.widget.Toast.LENGTH_SHORT).show()
@@ -623,6 +631,27 @@ fun SettingsDialog(
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00D2FF).copy(alpha = 0.8f))
                     ) { Text("Sync Apps from Cloud", color = Color.Black, fontWeight = FontWeight.Bold) }
+
+                    // Clock Format Toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Clock Format", color = Color.White)
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Button(
+                                onClick = { use24h = true; clockPrefs.edit().putBoolean("use24h", true).apply() },
+                                colors = ButtonDefaults.buttonColors(containerColor = if (use24h) Color(0xFF00D2FF) else Color.DarkGray),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                            ) { Text("24h", color = if (use24h) Color.Black else Color.White, fontSize = 12.sp) }
+                            Button(
+                                onClick = { use24h = false; clockPrefs.edit().putBoolean("use24h", false).apply() },
+                                colors = ButtonDefaults.buttonColors(containerColor = if (!use24h) Color(0xFF00D2FF) else Color.DarkGray),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                            ) { Text("12h", color = if (!use24h) Color.Black else Color.White, fontSize = 12.sp) }
+                        }
+                    }
 
                     Button(
                         onClick = { context.startActivity(Intent(android.provider.Settings.Panel.ACTION_WIFI)) },
@@ -826,11 +855,43 @@ fun UtilityMenu() {
 
 @Composable
 fun CustomStatusBar() {
-    val time = remember { mutableStateOf(getCurrentTime()) }
+    val context = LocalContext.current
+    val clockPrefs = context.getSharedPreferences("KioskSettings", Context.MODE_PRIVATE)
+    val use24h = remember { mutableStateOf(clockPrefs.getBoolean("use24h", true)) }
+    val time = remember { mutableStateOf("") }
+    val batteryLevel = remember { mutableStateOf(-1) }
+    val isCharging = remember { mutableStateOf(false) }
+    val networkType = remember { mutableStateOf("No Signal") }
+
     LaunchedEffect(Unit) {
         while (true) {
-            time.value = getCurrentTime()
-            kotlinx.coroutines.delay(1000)
+            // Clock
+            val fmt = if (clockPrefs.getBoolean("use24h", true)) "HH:mm" else "hh:mm a"
+            time.value = SimpleDateFormat(fmt, Locale.getDefault()).format(Date())
+            use24h.value = clockPrefs.getBoolean("use24h", true)
+
+            // Battery
+            val batteryIntent = context.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            batteryIntent?.let {
+                val level = it.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+                val scale = it.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100)
+                batteryLevel.value = (level * 100 / scale)
+                val status = it.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+                isCharging.value = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING || status == android.os.BatteryManager.BATTERY_STATUS_FULL
+            }
+
+            // Network
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            val nc = cm.getNetworkCapabilities(cm.activeNetwork)
+            networkType.value = when {
+                nc == null -> "Offline"
+                nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "WiFi"
+                nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "Mobile"
+                nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+                else -> "Online"
+            }
+
+            kotlinx.coroutines.delay(2000)
         }
     }
 
@@ -843,7 +904,23 @@ fun CustomStatusBar() {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(time.value, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-        Text("4G", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(networkType.value, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            if (batteryLevel.value >= 0) {
+                val batteryColor = when {
+                    isCharging.value -> Color(0xFF4CAF50)
+                    batteryLevel.value <= 15 -> Color.Red
+                    batteryLevel.value <= 30 -> Color(0xFFFF9800)
+                    else -> Color.White
+                }
+                Text(
+                    text = if (isCharging.value) "⚡${batteryLevel.value}%" else "${batteryLevel.value}%",
+                    color = batteryColor,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
     }
 }
 
@@ -877,6 +954,3 @@ private fun AppGridItem(app: LauncherAppItem, onClick: () -> Unit) {
     }
 }
 
-private fun getCurrentTime(): String {
-    return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-}

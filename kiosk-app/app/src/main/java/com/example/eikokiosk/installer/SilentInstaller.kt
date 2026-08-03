@@ -71,10 +71,20 @@ class SilentInstaller(private val context: Context) {
                 val ref = storage.getReferenceFromUrl(apkUrl)
                 ref.getFile(apkFile).await()
             } else {
-                val client = OkHttpClient()
-                val request = Request.Builder().url(apkUrl).build()
+                val client = OkHttpClient.Builder()
+                    .followRedirects(true)
+                    .followSslRedirects(true)
+                    .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                val request = Request.Builder()
+                    .url(apkUrl)
+                    .header("User-Agent", "EikoKiosk/1.0 (Android; Device-Owner)")
+                    .build()
+                Log.i(TAG, "Downloading from URL: $apkUrl")
                 val response = client.newCall(request).execute()
-                if (!response.isSuccessful) throw Exception("HTTP Download failed with code: ${response.code}")
+                Log.i(TAG, "HTTP response: ${response.code} from ${response.request.url}")
+                if (!response.isSuccessful) throw Exception("HTTP Download failed with code: ${response.code} from ${response.request.url}")
                 
                 FileOutputStream(apkFile).use { output ->
                     response.body?.byteStream()?.copyTo(output)
@@ -122,6 +132,31 @@ class SilentInstaller(private val context: Context) {
                 "$packageName: ${e.message}"
             )
             false
+        } finally {
+            // Cleanup: keep only latest 2 APKs per package to prevent unbounded cache growth
+            cleanupOldApks(packageName)
+        }
+    }
+
+    /**
+     * Removes old APK cache files, keeping only the 2 most recent per package.
+     */
+    private fun cleanupOldApks(packageName: String) {
+        try {
+            val cacheDir = File(context.filesDir, APK_CACHE_DIR)
+            val apkFiles = cacheDir.listFiles { file ->
+                file.name.startsWith("${packageName}_v") && file.name.endsWith(".apk")
+                        && !file.name.contains("rollback")
+            }?.sortedByDescending { it.lastModified() } ?: return
+
+            if (apkFiles.size > 2) {
+                apkFiles.drop(2).forEach { oldFile ->
+                    Log.i(TAG, "Cleaning up old APK: ${oldFile.name}")
+                    oldFile.delete()
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "APK cleanup failed: ${e.message}")
         }
     }
 

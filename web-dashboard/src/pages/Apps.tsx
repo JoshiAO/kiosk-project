@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { collection, query, onSnapshot, doc, setDoc, deleteDoc, addDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, setDoc, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Package, Plus, Edit2, Trash2, Code, X } from 'lucide-react';
 
@@ -58,7 +58,8 @@ export default function Apps() {
           packageName,
           versionName,
           versionCode: parseInt(versionCode, 10),
-          downloadUrl: downloadUrl || null
+          downloadUrl: downloadUrl || null,
+          updatedAt: serverTimestamp()
         }, { merge: true });
       } else {
         await addDoc(collection(db, 'approved_apps'), {
@@ -68,7 +69,8 @@ export default function Apps() {
           versionCode: parseInt(versionCode, 10),
           downloadUrl: downloadUrl || null,
           isActive: true,
-          createdAt: new Date()
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
         });
       }
       setShowModal(false);
