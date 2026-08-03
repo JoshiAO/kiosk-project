@@ -95,7 +95,7 @@ class FirebaseSyncWorker(
                         packageName = doc.getString("packageName") ?: return@mapNotNull null,
                         versionCode = (doc.getLong("versionCode") ?: 0).toInt(),
                         versionName = doc.getString("versionName") ?: "0.0.0",
-                        apkUrl = doc.getString("apkUrl") ?: "",
+                        apkUrl = doc.getString("downloadUrl") ?: "",
                         remoteConfig = doc.get("remoteConfig")?.toString(),
                         isActive = doc.getBoolean("isActive") ?: true,
                         updatedAt = doc.getTimestamp("updatedAt")?.toDate()?.time ?: 0L

@@ -477,7 +477,7 @@ fun LauncherScreen(
         }
 
         Column(modifier = Modifier.fillMaxSize()) {
-            CustomStatusBar(onSettingsClick = { showSettingsDialog = true })
+            CustomStatusBar()
 
             Box(modifier = Modifier.weight(1f)) {
                 Column(
@@ -523,14 +523,37 @@ fun LauncherScreen(
                         }
                     }
                 }
+            }
 
-                // Floating Utility Button at Top Left
-                Box(
-                    modifier = Modifier
-                        .padding(16.dp)
-                        .align(Alignment.TopStart)
+            // Bottom App Tray
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.4f))
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     UtilityMenu()
+                    
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(Color.White.copy(alpha = 0.15f))
+                            .clickable { showSettingsDialog = true },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        androidx.compose.material3.Icon(
+                            imageVector = androidx.compose.material.icons.Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
             }
         }
@@ -782,7 +805,7 @@ fun UtilityMenu() {
 }
 
 @Composable
-fun CustomStatusBar(onSettingsClick: () -> Unit) {
+fun CustomStatusBar() {
     val time = remember { mutableStateOf(getCurrentTime()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -800,18 +823,7 @@ fun CustomStatusBar(onSettingsClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(time.value, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("4G", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Icon(
-                imageVector = Icons.Default.Settings,
-                contentDescription = "Settings",
-                tint = Color.White,
-                modifier = Modifier
-                    .size(20.dp)
-                    .clickable { onSettingsClick() }
-            )
-        }
+        Text("4G", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
     }
 }
 

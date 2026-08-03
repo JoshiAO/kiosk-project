@@ -14,6 +14,9 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 /**
  * Handles silent APK download and installation using PackageInstaller API.
@@ -63,9 +66,21 @@ class SilentInstaller(private val context: Context) {
             // Step 2: Backup current version for rollback
             backupCurrentVersion(packageName, cacheDir)
 
-            // Step 3: Download APK from Firebase Storage
-            val ref = storage.getReferenceFromUrl(apkUrl)
-            ref.getFile(apkFile).await()
+            // Step 3: Download APK (Supports Firebase Storage or standard HTTP/HTTPS)
+            if (apkUrl.startsWith("gs://") || apkUrl.contains("firebasestorage.googleapis.com")) {
+                val ref = storage.getReferenceFromUrl(apkUrl)
+                ref.getFile(apkFile).await()
+            } else {
+                val client = OkHttpClient()
+                val request = Request.Builder().url(apkUrl).build()
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) throw Exception("HTTP Download failed with code: ${response.code}")
+                
+                FileOutputStream(apkFile).use { output ->
+                    response.body?.byteStream()?.copyTo(output)
+                        ?: throw Exception("Empty response body from URL")
+                }
+            }
             Log.i(TAG, "APK downloaded: ${apkFile.absolutePath} (${apkFile.length()} bytes)")
 
             // Step 4: Silent install via PackageInstaller

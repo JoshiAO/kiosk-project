@@ -119,8 +119,8 @@ function DeviceCard({ device }: { device: any }) {
           className="btn-secondary"
           style={{ flex: 1 }}
           onClick={() => {
-            const navigate = (window as any)._navigate || (() => { window.location.href = `/devices/${device.id}` });
-            navigate(`/devices/${device.id}`);
+            const navigate = (window as any)._navigate || (() => { window.location.href = `/${device.id}` });
+            navigate(`/${device.id}`);
           }}
         >
           Details
