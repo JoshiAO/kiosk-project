@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1070960166217",
+    "project_id": "eiko-project-kiosk",
+    "storage_bucket": "eiko-project-kiosk.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1070960166217:android:c00f257e036820fa7a4698",
+        "android_client_info": {
+          "package_name": "com.example.eikokiosk"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB7-cKNXbVM5o6u0CtlYFYcPqLI3FllWBE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

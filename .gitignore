@@ -1,0 +1,15 @@
+# Secrets & Private Keys
+service-account.json
+project-kiost.md
+.env
+.env.local
+
+# Android Keys
+*.jks
+*.keystore
+
+# Built APKs
+*.apk
+
+# macOS
+.DS_Store
