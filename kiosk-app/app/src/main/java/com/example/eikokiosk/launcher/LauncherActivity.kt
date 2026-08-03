@@ -585,14 +585,10 @@ fun SettingsDialog(
 ) {
     val context = LocalContext.current
     var selectedTab by remember { mutableStateOf(0) }
+    var showUtilityAppPicker by remember { mutableStateOf(false) }
     
     val prefs = context.getSharedPreferences("KioskSystemApps", Context.MODE_PRIVATE)
     val pm = context.packageManager
-    val allApps = remember {
-        val intent = Intent(Intent.ACTION_MAIN, null)
-        intent.addCategory(Intent.CATEGORY_LAUNCHER)
-        pm.queryIntentActivities(intent, 0).map { it.activityInfo }.sortedBy { it.loadLabel(pm).toString() }
-    }
     
     // Load enabled packages from SharedPreferences
     val enabledApps = remember { 
@@ -600,123 +596,310 @@ fun SettingsDialog(
         mutableStateListOf(*set.toTypedArray())
     }
 
+    // Activity log from logcat
+    val activityLog = remember { mutableStateListOf<String>() }
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == 1 && advancedUnlocked) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-s", "SilentInstaller:I", "FirebaseSyncWorker:I", "KioskModeManager:I"))
+                    val lines = process.inputStream.bufferedReader().readLines()
+                        .filter { it.contains("SilentInstaller") || it.contains("FirebaseSyncWorker") || it.contains("KioskModeManager") }
+                        .takeLast(50)
+                    withContext(Dispatchers.Main) {
+                        activityLog.clear()
+                        activityLog.addAll(lines)
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    // Show Utility App Picker as separate Dialog
+    if (showUtilityAppPicker) {
+        val allApps = remember {
+            val intent = Intent(Intent.ACTION_MAIN, null)
+            intent.addCategory(Intent.CATEGORY_LAUNCHER)
+            pm.queryIntentActivities(intent, 0).map { it.activityInfo }.sortedBy { it.loadLabel(pm).toString() }
+        }
+        
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { showUtilityAppPicker = false },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.85f))
+                    .clickable { showUtilityAppPicker = false },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .fillMaxHeight(0.8f)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(Color(0xFF1B2838))
+                        .clickable(enabled = false) {}
+                        .padding(24.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Select Utility Apps", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        Text("${enabledApps.size} selected", color = Color(0xFF00D2FF), fontSize = 14.sp)
+                    }
+                    
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(4),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        items(allApps.size) { index ->
+                            val appInfo = allApps[index]
+                            val isSelected = enabledApps.contains(appInfo.packageName)
+                            val label = appInfo.loadLabel(pm).toString()
+                            val icon = appInfo.loadIcon(pm)
+                            val bitmap = remember(icon) { icon.toBitmap(96, 96).asImageBitmap() }
+
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (isSelected) Color(0xFF00D2FF).copy(alpha = 0.15f) else Color.Transparent)
+                                    .clickable {
+                                        if (isSelected) enabledApps.remove(appInfo.packageName)
+                                        else enabledApps.add(appInfo.packageName)
+                                        prefs.edit().putStringSet("enabledApps", enabledApps.toSet()).apply()
+                                        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                                            val localDb = LocalDatabase.getInstance(context)
+                                            val remoteAppPkgs = localDb.approvedAppDao().getActiveAppsList().map { it.packageName }
+                                            val allAllowed = remoteAppPkgs + enabledApps.toSet() + listOf("com.android.settings", "com.samsung.android.settings")
+                                            KioskModeManager(context).setAllowedLockTaskPackages(allAllowed.toList())
+                                        }
+                                    }
+                                    .padding(8.dp)
+                            ) {
+                                Box {
+                                    Image(
+                                        bitmap = bitmap,
+                                        contentDescription = label,
+                                        modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp))
+                                    )
+                                    if (isSelected) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(18.dp)
+                                                .align(Alignment.TopEnd)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFF00D2FF)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text("✓", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = label,
+                                    color = if (isSelected) Color(0xFF00D2FF) else Color.White.copy(alpha = 0.7f),
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+
+                    Button(
+                        onClick = { showUtilityAppPicker = false },
+                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00D2FF))
+                    ) { Text("Done", color = Color.Black, fontWeight = FontWeight.Bold) }
+                }
+            }
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Device Settings", color = Color.White)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { selectedTab = 0 },
-                        colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == 0) Color(0xFF00D2FF) else Color.DarkGray)
-                    ) { Text("Basic", color = Color.White) }
-                    Button(
-                        onClick = { selectedTab = 1 },
-                        colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == 1) Color(0xFF00D2FF) else Color.DarkGray)
-                    ) { Text("Advanced", color = Color.White) }
+                Text("Device Settings", color = Color.White, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("Basic" to 0, "Advanced" to 1).forEach { (label, index) ->
+                        Button(
+                            onClick = { selectedTab = index },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (selectedTab == index) Color(0xFF00D2FF) else Color.White.copy(alpha = 0.08f)
+                            ),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        ) { Text(label, color = if (selectedTab == index) Color.Black else Color.White, fontSize = 13.sp) }
+                    }
                 }
             }
         },
         text = {
-            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp).padding(top = 16.dp)) {
+            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp).padding(top = 16.dp)) {
                 if (selectedTab == 0) {
                     val clockPrefs = context.getSharedPreferences("KioskSettings", Context.MODE_PRIVATE)
                     var use24h by remember { mutableStateOf(clockPrefs.getBoolean("use24h", true)) }
 
+                    // Sync Button
                     Button(
                         onClick = { 
                             android.widget.Toast.makeText(context, "Syncing apps from cloud...", android.widget.Toast.LENGTH_SHORT).show()
                             com.example.eikokiosk.sync.FirebaseSyncWorker.syncNow(context) 
                         },
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00D2FF).copy(alpha = 0.8f))
-                    ) { Text("Sync Apps from Cloud", color = Color.Black, fontWeight = FontWeight.Bold) }
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00D2FF)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("⟳  Sync Apps from Cloud", color = Color.Black, fontWeight = FontWeight.Bold) }
 
-                    // Clock Format Toggle
+                    // Clock Format
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.White.copy(alpha = 0.06f))
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Clock Format", color = Color.White)
+                        Text("Clock Format", color = Color.White, fontSize = 14.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Button(
-                                onClick = { use24h = true; clockPrefs.edit().putBoolean("use24h", true).apply() },
-                                colors = ButtonDefaults.buttonColors(containerColor = if (use24h) Color(0xFF00D2FF) else Color.DarkGray),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                            ) { Text("24h", color = if (use24h) Color.Black else Color.White, fontSize = 12.sp) }
-                            Button(
-                                onClick = { use24h = false; clockPrefs.edit().putBoolean("use24h", false).apply() },
-                                colors = ButtonDefaults.buttonColors(containerColor = if (!use24h) Color(0xFF00D2FF) else Color.DarkGray),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                            ) { Text("12h", color = if (!use24h) Color.Black else Color.White, fontSize = 12.sp) }
+                            listOf("24h" to true, "12h" to false).forEach { (label, is24) ->
+                                Button(
+                                    onClick = { use24h = is24; clockPrefs.edit().putBoolean("use24h", is24).apply() },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (use24h == is24) Color(0xFF00D2FF) else Color.White.copy(alpha = 0.1f)
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) { Text(label, color = if (use24h == is24) Color.Black else Color.White, fontSize = 12.sp) }
+                            }
                         }
                     }
 
-                    Button(
-                        onClick = { context.startActivity(Intent(android.provider.Settings.Panel.ACTION_WIFI)) },
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.1f))
-                    ) { Text("Wi-Fi Settings", color = Color.White) }
-                    
-                    Button(
-                        onClick = { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) },
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.1f))
-                    ) { Text("Bluetooth Settings", color = Color.White) }
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // System Settings
+                    listOf(
+                        "Wi-Fi Settings" to { context.startActivity(Intent(android.provider.Settings.Panel.ACTION_WIFI)) },
+                        "Bluetooth Settings" to { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+                    ).forEach { (label, action) ->
+                        Button(
+                            onClick = action,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.06f)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) { Text(label, color = Color.White) }
+                    }
                 } else {
                     if (advancedUnlocked) {
-                        Text("Select Utility Apps to display in the menu:", color = Color.White, modifier = Modifier.padding(bottom = 8.dp))
-                        
                         val scrollState = androidx.compose.foundation.rememberScrollState()
-                        Column(
-                            modifier = Modifier.weight(1f).fillMaxWidth().padding(bottom = 16.dp).verticalScroll(scrollState)
-                        ) {
-                            allApps.forEach { appInfo ->
-                                val isChecked = enabledApps.contains(appInfo.packageName)
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                                    Checkbox(
-                                        checked = isChecked, 
-                                        onCheckedChange = { checked -> 
-                                            if (checked) enabledApps.add(appInfo.packageName) else enabledApps.remove(appInfo.packageName)
-                                            prefs.edit().putStringSet("enabledApps", enabledApps.toSet()).apply()
-                                            
-                                            // Instantly update LockTask packages so they aren't blocked from launching
-                                            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                                                val localDb = LocalDatabase.getInstance(context)
-                                                val remoteAppPkgs = localDb.approvedAppDao().getActiveAppsList().map { it.packageName }
-                                                val allAllowed = remoteAppPkgs + enabledApps.toSet() + listOf("com.android.settings", "com.samsung.android.settings")
-                                                KioskModeManager(context).setAllowedLockTaskPackages(allAllowed.toList())
-                                            }
-                                        }
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(appInfo.loadLabel(pm).toString(), color = Color.White)
+                        Column(modifier = Modifier.weight(1f).verticalScroll(scrollState)) {
+                            // Utility Apps Button
+                            Button(
+                                onClick = { showUtilityAppPicker = true },
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.06f)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Manage Utility Apps", color = Color.White)
+                                    Text("${enabledApps.size} apps", color = Color(0xFF00D2FF), fontSize = 12.sp)
                                 }
                             }
-                        }
 
-                        Button(
-                            onClick = {
-                                KioskModeManager(context).exitKioskMode(context as androidx.activity.ComponentActivity)
-                                (context as androidx.activity.ComponentActivity).finish()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                        ) {
-                            Text("Exit Kiosk", color = Color.White)
-                        }
+                            // Activity Log
+                            Text("Activity Log", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color.Black.copy(alpha = 0.4f))
+                                    .padding(8.dp)
+                            ) {
+                                val logScrollState = androidx.compose.foundation.rememberScrollState()
+                                Column(modifier = Modifier.fillMaxSize().verticalScroll(logScrollState)) {
+                                    if (activityLog.isEmpty()) {
+                                        Text("No activity logs available", color = Color.Gray, fontSize = 11.sp)
+                                    } else {
+                                        activityLog.forEach { line ->
+                                            Text(
+                                                text = line.substringAfter("I ").substringAfter("E ").substringAfter("W "),
+                                                color = when {
+                                                    line.contains("FAILED") || line.contains("Error") -> Color.Red.copy(alpha = 0.9f)
+                                                    line.contains("SUCCESS") || line.contains("CONFIRMED") -> Color(0xFF4CAF50)
+                                                    else -> Color.White.copy(alpha = 0.6f)
+                                                },
+                                                fontSize = 10.sp,
+                                                lineHeight = 14.sp,
+                                                modifier = Modifier.padding(bottom = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
 
-                        Button(
-                            onClick = {
-                                FirebaseAuth.getInstance().signOut()
-                                ActivationManager(context).forceClearActivation()
-                                (context as ComponentActivity).recreate()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.Red.copy(alpha = 0.7f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Logout & Reset License", color = Color.White)
+                            // Export Log Button
+                            Button(
+                                onClick = {
+                                    kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                                        try {
+                                            val logDir = java.io.File(context.getExternalFilesDir(null), "logs")
+                                            logDir.mkdirs()
+                                            val file = java.io.File(logDir, "kiosk_log_${System.currentTimeMillis()}.txt")
+                                            file.writeText(activityLog.joinToString("\n"))
+                                            withContext(Dispatchers.Main) {
+                                                android.widget.Toast.makeText(context, "Log exported to: ${file.absolutePath}", android.widget.Toast.LENGTH_LONG).show()
+                                            }
+                                        } catch (e: Exception) {
+                                            withContext(Dispatchers.Main) {
+                                                android.widget.Toast.makeText(context, "Export failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 16.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.06f)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) { Text("Export Log as TXT", color = Color.White) }
+
+                            // Danger Zone
+                            Text("Danger Zone", color = Color.Red.copy(alpha = 0.7f), fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+
+                            Button(
+                                onClick = {
+                                    KioskModeManager(context).exitKioskMode(context as ComponentActivity)
+                                    (context as ComponentActivity).finish()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.06f)),
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) { Text("Exit Kiosk", color = Color.White) }
+
+                            Button(
+                                onClick = {
+                                    FirebaseAuth.getInstance().signOut()
+                                    ActivationManager(context).forceClearActivation()
+                                    (context as ComponentActivity).recreate()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.Red.copy(alpha = 0.2f)),
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) { Text("Logout & Reset License", color = Color.Red) }
                         }
                     } else if (authRequestPending) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
@@ -731,7 +914,8 @@ fun SettingsDialog(
                                     firestore.collection("devices").document(deviceId)
                                         .set(mapOf("authRequestPending" to true), SetOptions.merge())
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00D2FF))
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00D2FF)),
+                                shape = RoundedCornerShape(12.dp)
                             ) { Text("Request Access", color = Color.Black) }
                         }
                     }
@@ -741,7 +925,8 @@ fun SettingsDialog(
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Close", color = Color(0xFF00D2FF)) }
         },
-        containerColor = Color(0xFF1B2838)
+        containerColor = Color(0xFF1B2838),
+        shape = RoundedCornerShape(20.dp)
     )
 }
 

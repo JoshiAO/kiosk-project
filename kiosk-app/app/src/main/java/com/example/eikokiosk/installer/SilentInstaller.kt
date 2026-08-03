@@ -179,13 +179,21 @@ class SilentInstaller(private val context: Context) {
     /**
      * Installs an APK silently using PackageInstaller API.
      * Requires Device Owner privileges.
+     * Waits for the actual install result via a BroadcastReceiver.
      */
     private fun installApk(apkFile: File, packageName: String): Boolean {
         return try {
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+            val isDeviceOwner = dpm.isDeviceOwnerApp(context.packageName)
+            
             val params = PackageInstaller.SessionParams(
                 PackageInstaller.SessionParams.MODE_FULL_INSTALL
             ).apply {
                 setAppPackageName(packageName)
+                if (isDeviceOwner) {
+                    setInstallReason(android.content.pm.PackageManager.INSTALL_REASON_POLICY)
+                }
+                setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
             }
 
             val sessionId = packageInstaller.createSession(params)
@@ -199,8 +207,27 @@ class SilentInstaller(private val context: Context) {
                 session.fsync(outputStream)
             }
 
-            // Commit the session
-            val intent = Intent("com.example.eikokiosk.INSTALL_COMPLETE").apply {
+            // Use a latch to wait for the install result
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var installSuccess = false
+            var installMessage = ""
+
+            val resultReceiver = object : android.content.BroadcastReceiver() {
+                override fun onReceive(ctx: Context, intent: Intent) {
+                    val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+                    val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "Unknown"
+                    Log.i(TAG, "Install result for $packageName: status=$status message=$msg")
+                    installSuccess = (status == PackageInstaller.STATUS_SUCCESS)
+                    installMessage = msg
+                    latch.countDown()
+                    try { ctx.unregisterReceiver(this) } catch (_: Exception) {}
+                }
+            }
+
+            val filterAction = "com.example.eikokiosk.INSTALL_COMPLETE_$sessionId"
+            context.registerReceiver(resultReceiver, android.content.IntentFilter(filterAction), Context.RECEIVER_EXPORTED)
+
+            val intent = Intent(filterAction).apply {
                 setPackage(context.packageName)
             }
             val pendingIntent = PendingIntent.getBroadcast(
@@ -213,8 +240,22 @@ class SilentInstaller(private val context: Context) {
             session.commit(pendingIntent.intentSender)
             session.close()
 
-            Log.i(TAG, "PackageInstaller session committed for $packageName")
-            true
+            Log.i(TAG, "PackageInstaller session committed for $packageName, awaiting result...")
+            
+            // Wait up to 60 seconds for the install to complete
+            val completed = latch.await(60, java.util.concurrent.TimeUnit.SECONDS)
+            if (!completed) {
+                Log.e(TAG, "Install timed out for $packageName after 60s")
+                try { context.unregisterReceiver(resultReceiver) } catch (_: Exception) {}
+                return false
+            }
+
+            if (!installSuccess) {
+                Log.e(TAG, "Install FAILED for $packageName: $installMessage")
+            } else {
+                Log.i(TAG, "Install CONFIRMED for $packageName")
+            }
+            installSuccess
         } catch (e: Exception) {
             Log.e(TAG, "PackageInstaller failed: ${e.message}", e)
             false
