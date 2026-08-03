@@ -447,6 +447,24 @@ fun LauncherScreen(
             }
         }
     }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    
+    DisposableEffect(lifecycleOwner, approvedApps) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                approvedApps.forEach { app ->
+                    if (app.packageName != context.packageName) {
+                        try { am.killBackgroundProcesses(app.packageName) } catch (e: Exception) {}
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     var installTick by remember { mutableStateOf(0) }
 
