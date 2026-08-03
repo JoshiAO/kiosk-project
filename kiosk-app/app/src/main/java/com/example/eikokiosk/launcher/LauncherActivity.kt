@@ -616,7 +616,10 @@ fun SettingsDialog(
             Column(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp).padding(top = 16.dp)) {
                 if (selectedTab == 0) {
                     Button(
-                        onClick = { com.example.eikokiosk.sync.FirebaseSyncWorker.syncNow(context) },
+                        onClick = { 
+                            android.widget.Toast.makeText(context, "Syncing apps from cloud...", android.widget.Toast.LENGTH_SHORT).show()
+                            com.example.eikokiosk.sync.FirebaseSyncWorker.syncNow(context) 
+                        },
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00D2FF).copy(alpha = 0.8f))
                     ) { Text("Sync Apps from Cloud", color = Color.Black, fontWeight = FontWeight.Bold) }

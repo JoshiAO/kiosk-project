@@ -120,12 +120,20 @@ class FirebaseSyncWorker(
             db.approvedAppDao().deleteRemovedApps(remoteIds)
 
             // Step 4: Detect new or updated apps for installation
+            val pm = applicationContext.packageManager
             for (app in remoteApps) {
                 if (!app.isActive) continue
 
                 val local = localMap[app.id]
-                if (local == null || local.versionCode < app.versionCode) {
-                    Log.i(TAG, "New/updated app detected: ${app.packageName} v${app.versionCode}")
+                val isActuallyInstalled = try {
+                    pm.getPackageInfo(app.packageName, 0)
+                    true
+                } catch (e: Exception) {
+                    false
+                }
+
+                if (local == null || local.versionCode < app.versionCode || !isActuallyInstalled) {
+                    Log.i(TAG, "New/updated app detected (or missing): ${app.packageName} v${app.versionCode}")
                     if (app.apkUrl.isNotEmpty()) {
                         com.example.eikokiosk.installer.SilentInstaller(applicationContext).downloadAndInstall(app.packageName, app.versionCode, app.apkUrl)
                     } else {
