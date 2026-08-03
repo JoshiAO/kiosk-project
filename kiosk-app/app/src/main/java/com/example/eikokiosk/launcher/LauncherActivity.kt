@@ -616,7 +616,13 @@ fun SettingsDialog(
             Column(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp).padding(top = 16.dp)) {
                 if (selectedTab == 0) {
                     Button(
-                        onClick = { context.startActivity(Intent(Settings.Panel.ACTION_WIFI)) },
+                        onClick = { com.example.eikokiosk.sync.FirebaseSyncWorker.syncNow(context) },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00D2FF).copy(alpha = 0.8f))
+                    ) { Text("Sync Apps from Cloud", color = Color.Black, fontWeight = FontWeight.Bold) }
+
+                    Button(
+                        onClick = { context.startActivity(Intent(android.provider.Settings.Panel.ACTION_WIFI)) },
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.1f))
                     ) { Text("Wi-Fi Settings", color = Color.White) }
