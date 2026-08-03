@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -461,10 +462,13 @@ fun LauncherScreen(
                     val allowedPackages = remoteApps.map { it.packageName }.toMutableList()
                     val prefs = context.getSharedPreferences("KioskSystemApps", Context.MODE_PRIVATE)
                     val enabledApps = prefs.getStringSet("enabledApps", setOf()) ?: emptySet()
+                    val manualHomeApps = prefs.getStringSet("manualHomeApps", setOf()) ?: emptySet()
                     allowedPackages.addAll(enabledApps)
-                    // Keep essential settings packages
+                    allowedPackages.addAll(manualHomeApps)
+                    // Keep essential settings and play store packages
                     allowedPackages.addAll(listOf(
-                        "com.android.settings", "com.samsung.android.settings"
+                        "com.android.settings", "com.samsung.android.settings",
+                        "com.android.vending", "com.google.android.gms"
                     ))
                     KioskModeManager(context).setAllowedLockTaskPackages(allowedPackages)
                 }
@@ -510,8 +514,16 @@ fun LauncherScreen(
         }
     }
 
-    val launcherApps = remember(approvedApps, installTick) {
-        approvedApps.mapNotNull { app ->
+    val prefs = context.getSharedPreferences("KioskSystemApps", Context.MODE_PRIVATE)
+    val manualHomeApps = remember(showSettingsDialog, installTick) {
+        prefs.getStringSet("manualHomeApps", setOf()) ?: emptySet()
+    }
+
+    val launcherApps = remember(approvedApps, installTick, manualHomeApps) {
+        val apps = mutableListOf<LauncherAppItem>()
+        
+        // Add remote approved apps
+        apps.addAll(approvedApps.mapNotNull { app ->
             try {
                 pm.getPackageInfo(app.packageName, 0)
                 val appInfo = pm.getApplicationInfo(app.packageName, 0)
@@ -521,10 +533,23 @@ fun LauncherScreen(
                     icon = pm.getApplicationIcon(appInfo),
                     remoteConfig = app.remoteConfig
                 )
-            } catch (_: PackageManager.NameNotFoundException) {
-                null
-            }
-        }
+            } catch (_: PackageManager.NameNotFoundException) { null }
+        })
+
+        // Add manual home apps
+        apps.addAll(manualHomeApps.mapNotNull { pkg ->
+            try {
+                val appInfo = pm.getApplicationInfo(pkg, 0)
+                LauncherAppItem(
+                    appName = appInfo.loadLabel(pm).toString(),
+                    packageName = pkg,
+                    icon = pm.getApplicationIcon(appInfo),
+                    remoteConfig = null
+                )
+            } catch (_: PackageManager.NameNotFoundException) { null }
+        })
+        
+        apps.distinctBy { it.packageName }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -648,6 +673,7 @@ fun SettingsDialog(
     val context = LocalContext.current
     var selectedTab by remember { mutableStateOf(0) }
     var showUtilityAppPicker by remember { mutableStateOf(false) }
+    var showHomeAppPicker by remember { mutableStateOf(false) }
     
     val prefs = context.getSharedPreferences("KioskSystemApps", Context.MODE_PRIVATE)
     val pm = context.packageManager
@@ -655,6 +681,12 @@ fun SettingsDialog(
     // Load enabled packages from SharedPreferences
     val enabledApps = remember { 
         val set = prefs.getStringSet("enabledApps", setOf()) ?: setOf()
+        mutableStateListOf(*set.toTypedArray())
+    }
+
+    // Load manual home apps from SharedPreferences
+    val manualHomeApps = remember {
+        val set = prefs.getStringSet("manualHomeApps", setOf()) ?: setOf()
         mutableStateListOf(*set.toTypedArray())
     }
 
@@ -739,7 +771,7 @@ fun SettingsDialog(
                                         kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
                                             val localDb = LocalDatabase.getInstance(context)
                                             val remoteAppPkgs = localDb.approvedAppDao().getActiveAppsList().map { it.packageName }
-                                            val allAllowed = remoteAppPkgs + enabledApps.toSet() + listOf("com.android.settings", "com.samsung.android.settings")
+                                            val allAllowed = remoteAppPkgs + enabledApps.toSet() + manualHomeApps.toSet() + listOf("com.android.settings", "com.samsung.android.settings", "com.android.vending", "com.google.android.gms")
                                             KioskModeManager(context).setAllowedLockTaskPackages(allAllowed.toList())
                                         }
                                     }
@@ -866,6 +898,23 @@ fun SettingsDialog(
                     if (advancedUnlocked) {
                         val scrollState = androidx.compose.foundation.rememberScrollState()
                         Column(modifier = Modifier.weight(1f).verticalScroll(scrollState)) {
+                            // Home Screen Apps Button
+                            Button(
+                                onClick = { showHomeAppPicker = true },
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.06f)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Manage Home Screen Apps", color = Color.White)
+                                    Text("${manualHomeApps.size} apps", color = Color(0xFF00D2FF), fontSize = 12.sp)
+                                }
+                            }
+
                             // Utility Apps Button
                             Button(
                                 onClick = { showUtilityAppPicker = true },
@@ -990,6 +1039,113 @@ fun SettingsDialog(
         containerColor = Color(0xFF1B2838),
         shape = RoundedCornerShape(20.dp)
     )
+
+    // Show Home App Picker as separate Dialog
+    if (showHomeAppPicker) {
+        val allApps = remember {
+            val intent = Intent(Intent.ACTION_MAIN, null)
+            intent.addCategory(Intent.CATEGORY_LAUNCHER)
+            pm.queryIntentActivities(intent, 0).map { it.activityInfo }.sortedBy { it.loadLabel(pm).toString() }
+        }
+        
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { showHomeAppPicker = false },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.85f))
+                    .clickable { showHomeAppPicker = false },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .fillMaxHeight(0.8f)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(Color(0xFF1B2838))
+                        .clickable(enabled = false) {}
+                        .padding(24.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Select Home Screen Apps", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        Text("${manualHomeApps.size} selected", color = Color(0xFF00D2FF), fontSize = 14.sp)
+                    }
+                    
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(4),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        items(allApps.size) { index ->
+                            val appInfo = allApps[index]
+                            val isSelected = manualHomeApps.contains(appInfo.packageName)
+                            val label = appInfo.loadLabel(pm).toString()
+                            val icon = appInfo.loadIcon(pm)
+                            val bitmap = remember(icon) { icon.toBitmap(96, 96).asImageBitmap() }
+
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (isSelected) Color(0xFF00D2FF).copy(alpha = 0.15f) else Color.Transparent)
+                                    .clickable {
+                                        if (isSelected) manualHomeApps.remove(appInfo.packageName)
+                                        else manualHomeApps.add(appInfo.packageName)
+                                        prefs.edit().putStringSet("manualHomeApps", manualHomeApps.toSet()).apply()
+                                        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                                            val localDb = LocalDatabase.getInstance(context)
+                                            val remoteAppPkgs = localDb.approvedAppDao().getActiveAppsList().map { it.packageName }
+                                            val allAllowed = remoteAppPkgs + enabledApps.toSet() + manualHomeApps.toSet() + listOf("com.android.settings", "com.samsung.android.settings", "com.android.vending", "com.google.android.gms")
+                                            KioskModeManager(context).setAllowedLockTaskPackages(allAllowed.toList())
+                                        }
+                                    }
+                                    .padding(8.dp)
+                            ) {
+                                Box {
+                                    Image(
+                                        bitmap = bitmap,
+                                        contentDescription = label,
+                                        modifier = Modifier.size(64.dp)
+                                    )
+                                    if (isSelected) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .size(24.dp)
+                                                .background(Color(0xFF00D2FF), CircleShape)
+                                        ) {
+                                            Icon(Icons.Default.Check, contentDescription = "Selected", tint = Color.Black, modifier = Modifier.padding(4.dp))
+                                        }
+                                    }
+                                }
+                                Text(
+                                    text = label,
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(top = 8.dp)
+                                )
+                            }
+                        }
+                    }
+                    
+                    Button(
+                        onClick = { showHomeAppPicker = false },
+                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00D2FF)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Done", color = Color.Black, fontWeight = FontWeight.Bold) }
+                }
+            }
+        }
+    }
 }
 
 @Composable
