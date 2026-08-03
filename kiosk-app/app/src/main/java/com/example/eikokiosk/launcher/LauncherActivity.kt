@@ -448,7 +448,27 @@ fun LauncherScreen(
         }
     }
 
-    val launcherApps = remember(approvedApps) {
+    var installTick by remember { mutableStateOf(0) }
+
+    DisposableEffect(Unit) {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                installTick++
+            }
+        }
+        val filter = android.content.IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addDataScheme("package")
+        }
+        context.registerReceiver(receiver, filter)
+        onDispose {
+            context.unregisterReceiver(receiver)
+        }
+    }
+
+    val launcherApps = remember(approvedApps, installTick) {
         approvedApps.mapNotNull { app ->
             try {
                 pm.getPackageInfo(app.packageName, 0)
