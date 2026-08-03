@@ -15,6 +15,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.util.zip.ZipInputStream
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -61,15 +62,16 @@ class SilentInstaller(private val context: Context) {
             val cacheDir = File(context.filesDir, APK_CACHE_DIR)
             if (!cacheDir.exists()) cacheDir.mkdirs()
 
-            val apkFile = File(cacheDir, "${packageName}_v${versionCode}.apk")
+            val isZip = apkUrl.lowercase().let { it.contains(".zip") || it.contains(".apks") }
+            val downloadFile = File(cacheDir, "${packageName}_v${versionCode}${if (isZip) ".zip" else ".apk"}")
 
             // Step 2: Backup current version for rollback
             backupCurrentVersion(packageName, cacheDir)
 
-            // Step 3: Download APK (Supports Firebase Storage or standard HTTP/HTTPS)
+            // Step 3: Download APK or ZIP
             if (apkUrl.startsWith("gs://") || apkUrl.contains("firebasestorage.googleapis.com")) {
                 val ref = storage.getReferenceFromUrl(apkUrl)
-                ref.getFile(apkFile).await()
+                ref.getFile(downloadFile).await()
             } else {
                 val client = OkHttpClient.Builder()
                     .followRedirects(true)
@@ -86,21 +88,47 @@ class SilentInstaller(private val context: Context) {
                 Log.i(TAG, "HTTP response: ${response.code} from ${response.request.url}")
                 if (!response.isSuccessful) throw Exception("HTTP Download failed with code: ${response.code} from ${response.request.url}")
                 
-                FileOutputStream(apkFile).use { output ->
+                FileOutputStream(downloadFile).use { output ->
                     response.body?.byteStream()?.copyTo(output)
                         ?: throw Exception("Empty response body from URL")
                 }
             }
-            Log.i(TAG, "APK downloaded: ${apkFile.absolutePath} (${apkFile.length()} bytes)")
+            Log.i(TAG, "Downloaded to: ${downloadFile.absolutePath} (${downloadFile.length()} bytes)")
+
+            // Step 3.5: Extract ZIP if needed
+            val filesToInstall = mutableListOf<File>()
+            if (isZip) {
+                val extractDir = File(cacheDir, "${packageName}_v${versionCode}_splits")
+                if (extractDir.exists()) extractDir.deleteRecursively()
+                extractDir.mkdirs()
+
+                ZipInputStream(FileInputStream(downloadFile)).use { zis ->
+                    var entry = zis.nextEntry
+                    while (entry != null) {
+                        if (!entry.isDirectory && entry.name.endsWith(".apk")) {
+                            val outFile = File(extractDir, File(entry.name).name)
+                            FileOutputStream(outFile).use { fos ->
+                                zis.copyTo(fos)
+                            }
+                            filesToInstall.add(outFile)
+                            Log.i(TAG, "Extracted split APK: ${outFile.name}")
+                        }
+                        entry = zis.nextEntry
+                    }
+                }
+                if (filesToInstall.isEmpty()) throw Exception("No .apk files found inside the downloaded ZIP archive.")
+            } else {
+                filesToInstall.add(downloadFile)
+            }
 
             // Step 4: Silent install via PackageInstaller
-            val success = installApk(apkFile, packageName)
+            val success = installApk(filesToInstall, packageName)
 
             // Step 5: Record in history
             val entry = InstallHistoryEntity(
                 packageName = packageName,
                 versionCode = versionCode,
-                apkCachePath = apkFile.absolutePath,
+                apkCachePath = downloadFile.absolutePath,
                 installedAt = System.currentTimeMillis(),
                 status = if (success) "SUCCESS" else "FAILED"
             )
@@ -145,14 +173,14 @@ class SilentInstaller(private val context: Context) {
         try {
             val cacheDir = File(context.filesDir, APK_CACHE_DIR)
             val apkFiles = cacheDir.listFiles { file ->
-                file.name.startsWith("${packageName}_v") && file.name.endsWith(".apk")
+                file.name.startsWith("${packageName}_v") && (file.name.endsWith(".apk") || file.name.endsWith(".zip") || file.isDirectory)
                         && !file.name.contains("rollback")
             }?.sortedByDescending { it.lastModified() } ?: return
 
             if (apkFiles.size > 2) {
                 apkFiles.drop(2).forEach { oldFile ->
-                    Log.i(TAG, "Cleaning up old APK: ${oldFile.name}")
-                    oldFile.delete()
+                    Log.i(TAG, "Cleaning up old cache: ${oldFile.name}")
+                    if (oldFile.isDirectory) oldFile.deleteRecursively() else oldFile.delete()
                 }
             }
         } catch (e: Exception) {
@@ -177,11 +205,12 @@ class SilentInstaller(private val context: Context) {
     }
 
     /**
-     * Installs an APK silently using PackageInstaller API.
+     * Installs one or more APKs silently using PackageInstaller API.
+     * Supports both single monolithic APKs and split APK bundles.
      * Requires Device Owner privileges.
      * Waits for the actual install result via a BroadcastReceiver.
      */
-    private fun installApk(apkFile: File, packageName: String): Boolean {
+    private fun installApk(apkFiles: List<File>, packageName: String): Boolean {
         return try {
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
             val isDeviceOwner = dpm.isDeviceOwnerApp(context.packageName)
@@ -199,12 +228,15 @@ class SilentInstaller(private val context: Context) {
             val sessionId = packageInstaller.createSession(params)
             val session = packageInstaller.openSession(sessionId)
 
-            // Write APK to session
-            session.openWrite("package", 0, apkFile.length()).use { outputStream ->
-                FileInputStream(apkFile).use { inputStream ->
-                    inputStream.copyTo(outputStream)
+            // Write all APK splits to session
+            apkFiles.forEachIndexed { index, apkFile ->
+                val sessionName = "split_$index"
+                session.openWrite(sessionName, 0, apkFile.length()).use { outputStream ->
+                    FileInputStream(apkFile).use { inputStream ->
+                        inputStream.copyTo(outputStream)
+                    }
+                    session.fsync(outputStream)
                 }
-                session.fsync(outputStream)
             }
 
             // Use a latch to wait for the install result
@@ -275,7 +307,7 @@ class SilentInstaller(private val context: Context) {
         }
 
         Log.i(TAG, "Installing rollback APK for $packageName")
-        val success = installApk(rollbackFile, packageName)
+        val success = installApk(listOf(rollbackFile), packageName)
 
         if (success) {
             val entry = InstallHistoryEntity(
