@@ -530,15 +530,13 @@ fun LauncherScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(Color.Black.copy(alpha = 0.4f))
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
+                    .padding(vertical = 12.dp, horizontal = 24.dp),
+                contentAlignment = Alignment.CenterStart
             ) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    UtilityMenu()
-                    
                     Box(
                         modifier = Modifier
                             .size(56.dp)
@@ -554,6 +552,8 @@ fun LauncherScreen(
                             modifier = Modifier.size(28.dp)
                         )
                     }
+
+                    UtilityMenu()
                 }
             }
         }
@@ -656,6 +656,17 @@ fun SettingsDialog(
                                     Text(appInfo.loadLabel(pm).toString(), color = Color.White)
                                 }
                             }
+                        }
+
+                        Button(
+                            onClick = {
+                                KioskModeManager(context).exitKioskMode(context as androidx.activity.ComponentActivity)
+                                (context as androidx.activity.ComponentActivity).finish()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                        ) {
+                            Text("Exit Kiosk", color = Color.White)
                         }
 
                         Button(
