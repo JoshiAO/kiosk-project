@@ -136,6 +136,12 @@ class SilentInstaller(private val context: Context) {
 
             // Step 6: Send status event
             if (success) {
+                try {
+                    context.packageManager.setInstallerPackageName(packageName, "com.android.vending")
+                    Log.i(TAG, "Spoofed installer package to Google Play Store for $packageName")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to spoof installer package for $packageName: ${e.message}")
+                }
                 DeviceStatusWorker.sendEvent(
                     context,
                     DeviceStatusWorker.EVENT_INSTALL_SUCCESS,

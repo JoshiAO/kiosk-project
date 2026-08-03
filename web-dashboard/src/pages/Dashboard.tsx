@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
-import { collection, query, onSnapshot } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Smartphone, Battery, Clock, AlertTriangle, Search, Activity, Cpu } from 'lucide-react';
+import { Smartphone, Battery, Clock, AlertTriangle, Search, Activity, Cpu, Terminal, X, RefreshCw } from 'lucide-react';
+import { createPortal } from 'react-dom';
 
 export default function Dashboard() {
   const [devices, setDevices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [selectedLogDevice, setSelectedLogDevice] = useState<any | null>(null);
 
   useEffect(() => {
     const q = query(collection(db, 'devices'));
@@ -17,6 +19,23 @@ export default function Dashboard() {
     });
     return unsubscribe;
   }, []);
+
+  // Update selected device if it changes in firestore while modal is open
+  useEffect(() => {
+    if (selectedLogDevice) {
+      const updated = devices.find(d => d.id === selectedLogDevice.id);
+      if (updated) setSelectedLogDevice(updated);
+    }
+  }, [devices]);
+
+  const handleFetchLogs = async (deviceId: string) => {
+    try {
+      await updateDoc(doc(db, 'devices', deviceId), { logRequestPending: true });
+    } catch (e) {
+      console.error(e);
+      alert('Failed to request logs');
+    }
+  };
 
   const filteredDevices = devices.filter(d =>
     d.id.toLowerCase().includes(search.toLowerCase()) ||
@@ -65,9 +84,73 @@ export default function Dashboard() {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '24px' }}>
           {filteredDevices.map(device => (
-            <DeviceCard key={device.id} device={device} />
+            <DeviceCard key={device.id} device={device} onShowLogs={() => setSelectedLogDevice(device)} />
           ))}
         </div>
+      )}
+
+      {/* Logs Modal */}
+      {selectedLogDevice && createPortal(
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999
+        }}>
+          <div className="glass-panel animate-fade-in" style={{ width: '100%', maxWidth: '800px', padding: '32px', display: 'flex', flexDirection: 'column', height: '80vh' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <Terminal size={24} color="var(--accent-blue)" />
+                <h2 style={{ fontSize: '20px', margin: 0 }}>Device Logs: {selectedLogDevice.deviceModel}</h2>
+              </div>
+              <div style={{ display: 'flex', gap: '16px' }}>
+                <button 
+                  className="btn-primary" 
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                  onClick={() => handleFetchLogs(selectedLogDevice.id)}
+                  disabled={selectedLogDevice.logRequestPending}
+                >
+                  <RefreshCw size={16} className={selectedLogDevice.logRequestPending ? 'animate-spin' : ''} />
+                  {selectedLogDevice.logRequestPending ? 'Fetching...' : 'Fetch Latest Logs'}
+                </button>
+                <button onClick={() => setSelectedLogDevice(null)} style={{ color: 'var(--text-secondary)', background: 'transparent', border: 'none', cursor: 'pointer' }}>
+                  <X size={24} />
+                </button>
+              </div>
+            </div>
+            
+            <div style={{
+              flex: 1,
+              background: '#0d1117',
+              borderRadius: '12px',
+              padding: '16px',
+              overflowY: 'auto',
+              fontFamily: 'monospace',
+              fontSize: '12px',
+              border: '1px solid rgba(255,255,255,0.1)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '4px'
+            }}>
+              {selectedLogDevice.activityLog && selectedLogDevice.activityLog.length > 0 ? (
+                selectedLogDevice.activityLog.map((line: string, i: number) => (
+                  <div key={i} style={{ 
+                    color: line.includes('FAILED') || line.includes('Error') ? '#ff7b72' : 
+                           line.includes('SUCCESS') || line.includes('CONFIRMED') ? '#3fb950' : 
+                           '#8b949e',
+                    lineHeight: '1.4'
+                  }}>
+                    {line}
+                  </div>
+                ))
+              ) : (
+                <div style={{ color: '#8b949e', textAlign: 'center', marginTop: '40px' }}>
+                  No logs available for this device. Click "Fetch Latest Logs" to pull from the tablet.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -87,7 +170,7 @@ function StatCard({ title, value, icon }: { title: string, value: number, icon: 
   );
 }
 
-function DeviceCard({ device }: { device: any }) {
+function DeviceCard({ device, onShowLogs }: { device: any, onShowLogs: () => void }) {
   const isOnline = device.isOnline;
   const battery = device.batteryLevel || 0;
 
@@ -125,7 +208,7 @@ function DeviceCard({ device }: { device: any }) {
         >
           Details
         </button>
-        <button className="btn-secondary" style={{ flex: 1 }}>Logs</button>
+        <button className="btn-secondary" style={{ flex: 1 }} onClick={onShowLogs}>Logs</button>
       </div>
     </div>
   );

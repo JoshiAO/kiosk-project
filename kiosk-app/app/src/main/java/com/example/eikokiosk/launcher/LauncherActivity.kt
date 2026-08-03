@@ -390,6 +390,30 @@ fun LauncherScreen(
                 deviceName.value = snapshot.getString("deviceName")
                 authRequestPending = snapshot.getBoolean("authRequestPending") ?: false
                 advancedUnlocked = snapshot.getBoolean("advancedUnlocked") ?: false
+                
+                val logRequestPending = snapshot.getBoolean("logRequestPending") ?: false
+                if (logRequestPending) {
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            val process = Runtime.getRuntime().exec("logcat -d -v time -t 100 SilentInstaller:I KioskModeManager:I FirebaseSyncWorker:I *:S")
+                            val reader = java.io.BufferedReader(java.io.InputStreamReader(process.inputStream))
+                            val logs = mutableListOf<String>()
+                            var line: String?
+                            while (reader.readLine().also { line = it } != null) {
+                                logs.add(line ?: "")
+                            }
+                            firestore.collection("devices").document(deviceId).update(
+                                mapOf(
+                                    "activityLog" to logs.reversed(),
+                                    "logRequestPending" to false
+                                )
+                            )
+                        } catch (e: Exception) {
+                            android.util.Log.e("LauncherActivity", "Failed to fetch remote logs", e)
+                            firestore.collection("devices").document(deviceId).update("logRequestPending", false)
+                        }
+                    }
+                }
             }
         }
 
